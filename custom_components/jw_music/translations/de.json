@@ -1,0 +1,9 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "JW Music als Medienquelle hinzufügen? Alles wird direkt von jw.org gestreamt und nicht heruntergeladen."
+      }
+    }
+  }
+}
