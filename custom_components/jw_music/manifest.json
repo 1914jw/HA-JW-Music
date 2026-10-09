@@ -1,0 +1,14 @@
+{
+  "domain": "jw_music",
+  "name": "JW Music",
+  "codeowners": ["@1914jw"],
+  "config_flow": true,
+  "dependencies": ["http"],
+  "documentation": "https://github.com/1914jw/HA-JW-Music",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/1914jw/HA-JW-Music/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "1.0.0"
+}
