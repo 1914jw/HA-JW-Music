@@ -36,15 +36,6 @@ A Home Assistant custom integration that adds JW Music as a browsable [media sou
 2. Restart Home Assistant
 3. Add integration to Home Assistant
 
-## Upgrading from “Sing Out Joyfully”
-
-This replaces the old **Sing Out Joyfully** integration (`sing_out_joyfully` domain) — it does not upgrade in place. On the Home Assistant host:
-
-1. **Settings → Devices & Services → Sing Out Joyfully →** delete the integration
-2. Delete the old component folder: `/config/custom_components/sing_out_joyfully/`
-3. Delete the old cache file: `/config/.storage/sing_out_joyfully`
-4. Install **JW Music** as described above and add it fresh
-
 ## Setup
 
 **Settings → Devices & Services → Add Integration → JW Music → confirm.**
