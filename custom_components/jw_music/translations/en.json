@@ -1,0 +1,9 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Add JW Music as a media source? Everything is streamed directly from jw.org and never downloaded."
+      }
+    }
+  }
+}
