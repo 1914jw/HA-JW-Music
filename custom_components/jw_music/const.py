@@ -8,15 +8,19 @@ NAME: Final = "JW Music"
 
 LOGGER = logging.getLogger(__package__)
 
+CONF_LANGUAGE: Final = "language"
+DEFAULT_LANGUAGE: Final = "E"
+MEDIATOR_LANGUAGES_URL: Final = "https://b.jw-cdn.org/apis/mediator/v1/languages"
+
 # -- "Sing Out Joyfully" to Jehovah (publication media API) --
 PUB_MEDIA_LINKS_URL: Final = "https://app.jw-cdn.org/apis/pub-media/GETPUBMEDIALINKS"
-PUB_SYMBOL: Final = "sjjm"  # "Sing Out Joyfully" to Jehovah -- Meetings (pub code)
-LANGWRITTEN: Final = "E"  # English
+PUB_SYMBOL: Final = "sjjm"
+# pub-media numbers the audio-description editions from 500 (516 describes song 16)
+AUDIO_DESCRIPTION_MIN_TRACK: Final = 500
 FILEFORMAT: Final = "MP3"
 MIME_TYPE: Final = "audio/mpeg"
 
 STREAMABLE_MIME_TYPES: Final = ("audio/mpeg", "audio/flac", "audio/ogg", "audio/wav")
-# Common spelling variants -> the canonical type used above.
 MIME_TYPE_ALIASES: Final = {
     "audio/mp3": "audio/mpeg",
     "audio/x-mp3": "audio/mpeg",
@@ -29,7 +33,7 @@ MIME_TYPE_ALIASES: Final = {
 }
 SOJ_FOLDER_NAME: Final = "“Sing Out Joyfully” to Jehovah"
 SOJ_FOLDER_THUMBNAIL: Final = (
-    "https://cms-imgp.jw-cdn.org/img/p/sjj/univ/pt/sjj_univ_lg.jpg"
+    "https://cms-imgp.jw-cdn.org/img/p/sjjm/univ/pt/sjjm_univ_lg.jpg"
 )
 
 # -- International Music / Soundtracks (mediator categories API) --
@@ -37,6 +41,9 @@ MEDIATOR_CATEGORIES_URL: Final = "https://b.jw-cdn.org/apis/mediator/v1/categori
 
 INTERNATIONAL_MUSIC_KEY: Final = "AudioInternationalMusic"
 INTERNATIONAL_MUSIC_FOLDER_NAME: Final = "International Music"
+INTERNATIONAL_MUSIC_THUMBNAIL: Final = (
+    "https://cms-imgp.jw-cdn.org/img/p/imc/univ/pt/imc_univ_lg.jpg"
+)
 
 SOUNDTRACKS_FOLDER_NAME: Final = "Soundtracks"
 SOUNDTRACKS_FOLDER_STATIC_URL: Final = "/jw_music_static/soundtracks-folder.png"
@@ -48,8 +55,7 @@ SOUNDTRACK_KEY_HINT: Final = "soundtrack"
 SOUNDTRACK_SCAN_MAX_DEPTH: Final = 6
 SOUNDTRACK_SCAN_MAX_REQUESTS: Final = 250
 
-# Explicitly known soundtracks: mediator category key -> (pub-media pub
-# code, official display name, jw-cdn.org cover image)
+# mediator category key -> (pub-media pub code, English name, cover image)
 KNOWN_SOUNDTRACKS: Final = {
     "GNJST1Soundtrack": (
         "gnjst1",
@@ -82,7 +88,7 @@ CACHE_DOWNLOAD_TIMEOUT: Final = 120  # seconds
 STORAGE_VERSION: Final = 1
 STORAGE_KEY: Final = DOMAIN
 
-# Weekly refresh schedule: every Monday at 00:00:05.
+# Weekly refresh: every Monday at 00:00:05.
 CHECK_HOUR: Final = 0
 CHECK_MINUTE: Final = 0
 CHECK_SECOND: Final = 5

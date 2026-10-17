@@ -7,10 +7,12 @@ from typing import Any
 import aiohttp
 
 from .const import (
+    AUDIO_DESCRIPTION_MIN_TRACK,
     FILEFORMAT,
-    LANGWRITTEN,
+    INTERNATIONAL_MUSIC_KEY,
     LOGGER,
     MEDIATOR_CATEGORIES_URL,
+    MEDIATOR_LANGUAGES_URL,
     MIME_TYPE,
     MIME_TYPE_ALIASES,
     PUB_MEDIA_LINKS_URL,
@@ -24,23 +26,86 @@ from .const import (
 Track = dict[str, str]  # {"title": ..., "url": ..., "mime_type": ...}
 
 
-async def async_fetch_soj_songs(session: aiohttp.ClientSession) -> dict[str, Track]:
-    """Fetch the current "Sing Out Joyfully" song list.
+class LanguageError(Exception):
+    """A language code cannot be used with jw.org."""
 
-    Returns song number (as string, e.g. "1") -> {"title", "url"},
-    matching the numbering and titles shown on jw.org exactly.
-    """
-    params = {
-        "langwritten": LANGWRITTEN,
-        "pub": PUB_SYMBOL,
-        "fileformat": FILEFORMAT,
-    }
-    async with session.get(PUB_MEDIA_LINKS_URL, params=params) as resp:
+
+class UnknownLanguageError(LanguageError):
+    """The code is not in jw.org's language list."""
+
+
+class NoContentError(LanguageError):
+    """The language exists, but has no music content."""
+
+
+async def async_fetch_language_codes(session: aiohttp.ClientSession) -> dict[str, str]:
+    """Fetch jw.org's current language list as {UPPERCASE code: exact code}."""
+    url = f"{MEDIATOR_LANGUAGES_URL}/E/web"
+    async with session.get(url) as resp:
         resp.raise_for_status()
         payload: dict[str, Any] = await resp.json(content_type=None)
+    return {
+        str(lang["code"]).upper(): str(lang["code"])
+        for lang in payload.get("languages") or []
+        if lang.get("code")
+    }
 
-    files = payload.get("files", {}).get(LANGWRITTEN, {}).get(FILEFORMAT, [])
 
+async def async_validate_language(session: aiohttp.ClientSession, code: str) -> str:
+    """Return the exact jw.org code for ``code``.
+
+    Raises UnknownLanguageError if jw.org does not list it and
+    NoContentError if it has neither songbook nor International Music
+    audio. Network errors propagate.
+    """
+    codes = await async_fetch_language_codes(session)
+    language = codes.get(code.strip().upper())
+    if language is None:
+        raise UnknownLanguageError(code)
+    _, songs = await async_fetch_soj_songs(session, language)
+    if songs:
+        return language
+    intl = await async_fetch_flat_category(session, INTERNATIONAL_MUSIC_KEY, language)
+    if intl and intl[1]:
+        return language
+    raise NoContentError(language)
+
+
+async def _async_fetch_pub_media(
+    session: aiohttp.ClientSession, pub_code: str, language: str
+) -> tuple[str | None, list[dict[str, Any]]]:
+    """Fetch a publication's (name, MP3 files); empty if it does not exist."""
+    params = {"langwritten": language, "pub": pub_code, "fileformat": FILEFORMAT}
+    async with session.get(PUB_MEDIA_LINKS_URL, params=params) as resp:
+        if resp.status == 404:
+            return None, []
+        resp.raise_for_status()
+        payload: dict[str, Any] = await resp.json(content_type=None)
+    # The parent title has no edition suffix; fall back to the publication's own.
+    name = payload.get("parentPubName") or payload.get("pubName")
+    files = (payload.get("files") or {}).get(language, {}).get(FILEFORMAT, [])
+    return name or None, files
+
+
+def _is_audio_description(item: dict[str, Any], title: str) -> bool:
+    """Language-independent: described editions are numbered from 500."""
+    try:
+        if int(item.get("track") or 0) >= AUDIO_DESCRIPTION_MIN_TRACK:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return bool(item.get("specialty")) or "audio description" in title.lower()
+
+
+async def async_fetch_soj_songs(
+    session: aiohttp.ClientSession, language: str
+) -> tuple[str | None, dict[str, Track]]:
+    """Fetch the "Sing Out Joyfully" songbook as (name, songs).
+
+    Songs map song number (as string, e.g. "1") -> track. Titles are
+    pre-formatted by the API ("1. Title") and used as-is.
+    """
+    name, files = await _async_fetch_pub_media(session, PUB_SYMBOL, language)
     songs: dict[str, Track] = {}
     for item in files:
         track = item.get("track")
@@ -48,43 +113,27 @@ async def async_fetch_soj_songs(session: aiohttp.ClientSession) -> dict[str, Tra
         url = (item.get("file") or {}).get("url")
         if not track or not title or not url:
             continue
-        if item.get("specialty") or "audio description" in title.lower():
-            # Skip the Audio Description edition published alongside every
-            # song -- only the standard recording belongs in the folder.
+        if _is_audio_description(item, title):
             continue
         songs[str(track)] = {"title": title, "url": url, "mime_type": MIME_TYPE}
 
-    return songs
+    return name, songs
 
 
 async def async_fetch_pub_media_tracks(
-    session: aiohttp.ClientSession, pub_code: str
+    session: aiohttp.ClientSession, pub_code: str, language: str
 ) -> tuple[str | None, dict[str, Track]] | None:
-    """Fetch a publication's tracks via the pub-media API (the same API
-    and fileformat used for Sing Out Joyfully). Used as a fallback for
-    the known soundtracks in case one isn't reachable as a mediator
-    category. Returns None if the pub code doesn't exist or has no
-    audio. The returned name is None -- callers that need a display
-    name should supply their own (e.g. from KNOWN_SOUNDTRACKS).
+    """Fetch a publication's tracks via the pub-media API.
+
+    Fallback for known soundtracks that are not reachable as a mediator
+    category. The name is always None; callers supply their own.
     """
-    params = {"langwritten": LANGWRITTEN, "pub": pub_code, "fileformat": FILEFORMAT}
-    async with session.get(PUB_MEDIA_LINKS_URL, params=params) as resp:
-        if resp.status == 404:
-            return None
-        resp.raise_for_status()
-        payload: dict[str, Any] = await resp.json(content_type=None)
-
-    files = payload.get("files", {}).get(LANGWRITTEN, {}).get(FILEFORMAT, [])
-    if not files:
-        return None
-
     tracks: dict[str, Track] = {}
+    _, files = await _async_fetch_pub_media(session, pub_code, language)
     for idx, item in enumerate(files, start=1):
         title = item.get("title")
         url = (item.get("file") or {}).get("url")
-        if not title or not url:
-            continue
-        if item.get("specialty") or "audio description" in title.lower():
+        if not title or not url or _is_audio_description(item, title):
             continue
         key = str(item.get("track") or idx)
         tracks[key] = {"title": title, "url": url, "mime_type": MIME_TYPE}
@@ -93,10 +142,7 @@ async def async_fetch_pub_media_tracks(
 
 
 def normalize_mime_type(mime_type: str | None) -> str:
-    """Return a canonical audio MIME type (e.g. "audio/mp3" -> "audio/mpeg").
-
-    Falls back to the default MP3 type when the value is missing or empty.
-    """
+    """Return a canonical audio MIME type (e.g. "audio/mp3" -> "audio/mpeg")."""
     base = str(mime_type or "").split(";")[0].strip().lower()
     if not base:
         return MIME_TYPE
@@ -111,15 +157,9 @@ def _bitrate(media_file: dict[str, Any]) -> float:
 
 
 def _best_audio_file(files: list[dict[str, Any]]) -> tuple[str, str] | None:
-    """Pick the best audio file from a media item's files.
+    """Pick (url, mimetype) of the best audio file.
 
-    Formats every player can handle (MP3, FLAC, Ogg, WAV) win over exotic
-    ones, so Apple TV / AirPlay -- where Home Assistant decodes the
-    stream -- plays the same tracks as Google Cast. Within that, the
-    highest bitrate wins.
-
-    Returns (url, mimetype) -- the real mimetype is kept (not assumed)
-    so playback works correctly on media players that validate it.
+    Widely playable formats win over exotic ones, then the highest bitrate.
     """
     audio_files = [
         (normalize_mime_type(f.get("mimetype")), f)
@@ -137,7 +177,7 @@ def _best_audio_file(files: list[dict[str, Any]]) -> tuple[str, str] | None:
 
 
 def _parse_media_items(media: list[dict[str, Any]]) -> dict[str, Track]:
-    """Turn a category's raw "media" list into {guid: {title, url, mime_type}}."""
+    """Turn a category's raw "media" list into {guid: track}."""
     tracks: dict[str, Track] = {}
     for item in media:
         guid = item.get("guid")
@@ -151,10 +191,10 @@ def _parse_media_items(media: list[dict[str, Any]]) -> dict[str, Track]:
 
 
 async def async_fetch_category(
-    session: aiohttp.ClientSession, key: str
+    session: aiohttp.ClientSession, key: str, language: str
 ) -> dict[str, Any] | None:
     """Fetch one mediator category by key. Returns None if not found."""
-    url = f"{MEDIATOR_CATEGORIES_URL}/{LANGWRITTEN}/{key}"
+    url = f"{MEDIATOR_CATEGORIES_URL}/{language}/{key}"
     async with session.get(
         url, params={"detailed": "1", "clientType": "www"}
     ) as resp:
@@ -166,13 +206,10 @@ async def async_fetch_category(
 
 
 async def async_fetch_flat_category(
-    session: aiohttp.ClientSession, key: str
+    session: aiohttp.ClientSession, key: str, language: str
 ) -> tuple[str, dict[str, Track]] | None:
-    """Fetch a single category's own tracks (International Music, or one
-    already-known soundtrack). Returns (display name, tracks), or None if
-    the category no longer exists.
-    """
-    category = await async_fetch_category(session, key)
+    """Fetch a category's own tracks. Returns (name, tracks) or None."""
+    category = await async_fetch_category(session, key, language)
     if category is None:
         return None
     name = category.get("name") or key
@@ -188,15 +225,12 @@ def _looks_like_soundtrack(category: dict[str, Any]) -> bool:
 
 
 async def async_discover_soundtracks(
-    session: aiohttp.ClientSession, root_key: str
+    session: aiohttp.ClientSession, root_key: str, language: str
 ) -> dict[str, tuple[str, dict[str, Track]]]:
     """Recursively scan a category tree for soundtrack categories.
 
-    Returns {category_key: (display name, tracks)} for every category
-    found whose key or name contains "Soundtrack" and that has at least
-    one playable track. Best-effort: jw.org has no explicit
-    "type: soundtrack" field, so this is a heuristic, not a guarantee --
-    see SOUNDTRACK_KEY_HINT in const.py.
+    Best-effort heuristic: matches "soundtrack" in a category's key or
+    name and requires at least one playable track.
     """
     found: dict[str, tuple[str, dict[str, Track]]] = {}
     visited: set[str] = set()
@@ -211,7 +245,7 @@ async def async_discover_soundtracks(
         ):
             return
         visited.add(key)
-        category = await async_fetch_category(session, key)
+        category = await async_fetch_category(session, key, language)
         requests_made += 1
         if category is None:
             return

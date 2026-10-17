@@ -19,9 +19,13 @@ from .api import (
 )
 from .const import (
     AUDIO_ROOT_KEY,
+    AUDIO_DESCRIPTION_MIN_TRACK,
+    DEFAULT_LANGUAGE,
+    INTERNATIONAL_MUSIC_FOLDER_NAME,
     INTERNATIONAL_MUSIC_KEY,
     KNOWN_SOUNDTRACKS,
     LOGGER,
+    SOJ_FOLDER_NAME,
 )
 
 SoundtrackFolder = dict[str, Any]  # {"name": str, "tracks": dict[str, Track]}
@@ -33,19 +37,59 @@ class MusicLibrary:
 
     hass: HomeAssistant
     store: Store
+    language: str = DEFAULT_LANGUAGE
+    names: dict[str, str] = field(default_factory=dict)
     soj_songs: dict[str, Track] = field(default_factory=dict)
     international_songs: dict[str, Track] = field(default_factory=dict)
     soundtracks: dict[str, SoundtrackFolder] = field(default_factory=dict)
 
     @property
     def is_empty(self) -> bool:
-        """True if nothing has ever been fetched yet (fresh install)."""
+        """True if nothing has been fetched yet (fresh install or new language)."""
         return not (self.soj_songs or self.international_songs or self.soundtracks)
+
+    @property
+    def soj_name(self) -> str:
+        """Display name of the Sing Out Joyfully folder."""
+        return self.names.get("soj", SOJ_FOLDER_NAME)
+
+    @property
+    def intl_name(self) -> str:
+        """Display name of the International Music folder."""
+        return self.names.get("intl", INTERNATIONAL_MUSIC_FOLDER_NAME)
+
+    @staticmethod
+    def _category_name(name: str | None) -> str | None:
+        """The API falls back to the category key when a name is missing."""
+        return None if name == INTERNATIONAL_MUSIC_KEY else name
+
+    def _set_name(self, key: str, english: str, jw_name: str | None) -> bool:
+        """Store a folder name from jw.org. English keeps the built-in name."""
+        name = english
+        if self.language != DEFAULT_LANGUAGE and jw_name and jw_name != english:
+            name = jw_name
+        if self.names.get(key) == name:
+            return False
+        self.names[key] = name
+        return True
+
+    def prune_invalid(self) -> bool:
+        """Drop stored audio-description entries (song numbers from 500)."""
+        stale = [
+            n
+            for n in self.soj_songs
+            if n.isdigit() and int(n) >= AUDIO_DESCRIPTION_MIN_TRACK
+        ]
+        for number in stale:
+            del self.soj_songs[number]
+        return bool(stale)
 
     async def async_save(self) -> None:
         """Persist the current library."""
         await self.store.async_save(
             {
+                "language": self.language,
+                "names": self.names,
                 "soj_songs": self.soj_songs,
                 "international_songs": self.international_songs,
                 "soundtracks": self.soundtracks,
@@ -53,45 +97,54 @@ class MusicLibrary:
         )
 
     async def async_full_fetch(self, session: aiohttp.ClientSession) -> None:
-        """First-ever setup: populate all three groups from scratch."""
-        self.soj_songs = await async_fetch_soj_songs(session)
+        """Populate all three groups from scratch."""
+        soj_name, self.soj_songs = await async_fetch_soj_songs(session, self.language)
+        self._set_name("soj", SOJ_FOLDER_NAME, soj_name)
 
-        intl = await async_fetch_flat_category(session, INTERNATIONAL_MUSIC_KEY)
+        intl = await async_fetch_flat_category(
+            session, INTERNATIONAL_MUSIC_KEY, self.language
+        )
         self.international_songs = intl[1] if intl else {}
+        self._set_name(
+            "intl",
+            INTERNATIONAL_MUSIC_FOLDER_NAME,
+            self._category_name(intl[0]) if intl else None,
+        )
 
         self.soundtracks = await self._async_discover_all_soundtracks(session)
 
         await self.async_save()
 
     async def async_refresh(self, session: aiohttp.ClientSession) -> None:
-        """Weekly check: add new songs/soundtracks. Never changes or
-        removes existing entries.
+        """Add new songs/soundtracks and sync folder names. Never changes
+        or removes existing songs.
         """
         changed = False
 
         try:
             changed |= await self._refresh_soj(session)
         except Exception:  # noqa: BLE001
-            LOGGER.exception("JW Music: weekly Sing Out Joyfully check failed")
+            LOGGER.exception("JW Music: Sing Out Joyfully refresh failed")
 
         try:
             changed |= await self._refresh_international(session)
         except Exception:  # noqa: BLE001
-            LOGGER.exception("JW Music: weekly International Music check failed")
+            LOGGER.exception("JW Music: International Music refresh failed")
 
         try:
             changed |= await self._refresh_soundtracks(session)
         except Exception:  # noqa: BLE001
-            LOGGER.exception("JW Music: weekly Soundtracks check failed")
+            LOGGER.exception("JW Music: Soundtracks refresh failed")
 
         if changed:
             await self.async_save()
 
     async def _refresh_soj(self, session: aiohttp.ClientSession) -> bool:
-        latest = await async_fetch_soj_songs(session)
+        name, latest = await async_fetch_soj_songs(session, self.language)
+        changed = self._set_name("soj", SOJ_FOLDER_NAME, name)
         new_numbers = [n for n in latest if n not in self.soj_songs]
         if not new_numbers:
-            return False
+            return changed
         for number in new_numbers:
             self.soj_songs[number] = latest[number]
         LOGGER.info(
@@ -102,13 +155,18 @@ class MusicLibrary:
         return True
 
     async def _refresh_international(self, session: aiohttp.ClientSession) -> bool:
-        result = await async_fetch_flat_category(session, INTERNATIONAL_MUSIC_KEY)
+        result = await async_fetch_flat_category(
+            session, INTERNATIONAL_MUSIC_KEY, self.language
+        )
         if result is None:
             return False
-        _, latest = result
+        name, latest = result
+        changed = self._set_name(
+            "intl", INTERNATIONAL_MUSIC_FOLDER_NAME, self._category_name(name)
+        )
         new_guids = [g for g in latest if g not in self.international_songs]
         if not new_guids:
-            return False
+            return changed
         for guid in new_guids:
             self.international_songs[guid] = latest[guid]
         LOGGER.info(
@@ -119,20 +177,21 @@ class MusicLibrary:
     async def _async_discover_all_soundtracks(
         self, session: aiohttp.ClientSession
     ) -> dict[str, SoundtrackFolder]:
-        """Recursive scan of the whole Audio tree, plus the explicitly
-        known soundtracks as a safety net in case the scan doesn't reach
-        them -- checked by mediator category key first, falling back to
-        their pub-media pub code (like Sing Out Joyfully) if that comes
-        back empty.
+        """Scan the whole Audio tree, then make sure the known soundtracks
+        are present (mediator category first, pub-media as fallback).
         """
-        discovered = await async_discover_soundtracks(session, AUDIO_ROOT_KEY)
+        discovered = await async_discover_soundtracks(
+            session, AUDIO_ROOT_KEY, self.language
+        )
 
         for key, (pub_code, _, _) in KNOWN_SOUNDTRACKS.items():
             if key in discovered and discovered[key][1]:
                 continue
-            result = await async_fetch_flat_category(session, key)
+            result = await async_fetch_flat_category(session, key, self.language)
             if result is None or not result[1]:
-                result = await async_fetch_pub_media_tracks(session, pub_code)
+                result = await async_fetch_pub_media_tracks(
+                    session, pub_code, self.language
+                )
             if result and result[1]:
                 discovered[key] = result
 
@@ -141,20 +200,22 @@ class MusicLibrary:
             for key, (name, tracks) in discovered.items()
         }
 
-        # The official name/thumbnail always win for the four known
-        # soundtracks, regardless of which lookup found them.
-        for key, (_, official_name, thumbnail) in KNOWN_SOUNDTRACKS.items():
+        # Known soundtracks always get their cover. The English name is
+        # used for English, or when the lookup returned no localized name.
+        for key, (_, english_name, thumbnail) in KNOWN_SOUNDTRACKS.items():
             if key in folders:
-                folders[key]["name"] = official_name
+                if self.language == DEFAULT_LANGUAGE or folders[key]["name"] in (
+                    None,
+                    key,
+                ):
+                    folders[key]["name"] = english_name
                 folders[key]["thumbnail"] = thumbnail
 
         return folders
 
     async def _refresh_soundtracks(self, session: aiohttp.ClientSession) -> bool:
-        """One scan covers new tracks in known soundtracks, entirely new
-        soundtrack folders, and keeps name/thumbnail in sync for the
-        four explicitly known ones (so e.g. a newly added thumbnail
-        reaches installs that already have the folder stored).
+        """One scan covers new tracks, new soundtrack folders, and keeps
+        name/cover of the known ones in sync.
         """
         changed = False
         all_found = await self._async_discover_all_soundtracks(session)
