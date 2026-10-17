@@ -2,8 +2,39 @@
   "config": {
     "step": {
       "user": {
-        "description": "JW Music als Medienquelle hinzufügen? Alles wird direkt von jw.org gestreamt und nicht heruntergeladen."
+        "description": "JW Music als Medienquelle hinzufügen? Alles wird direkt von jw.org gestreamt und nicht heruntergeladen.",
+        "data": {
+          "language": "Sprachcode"
+        },
+        "data_description": {
+          "language": "jw.org-Sprachcode für die Liedtitel (`X` → Deutsch)."
+        }
       }
+    },
+    "error": {
+      "invalid_language": "Dieser Sprachcode existiert auf jw.org nicht.",
+      "no_content": "jw.org hat für diese Sprache keine Musik.",
+      "cannot_connect": "jw.org ist nicht erreichbar.",
+      "unknown": "Unerwarteter Fehler. Prüfe das Home-Assistant-Protokoll."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Beim Ändern der Sprache wird die Integration neu geladen und die gespeicherte Liedliste durch die neue Sprache ersetzt.",
+        "data": {
+          "language": "Sprachcode"
+        },
+        "data_description": {
+          "language": "jw.org-Sprachcode für die Liedtitel (`X` → Deutsch)."
+        }
+      }
+    },
+    "error": {
+      "invalid_language": "Dieser Sprachcode existiert auf jw.org nicht.",
+      "no_content": "jw.org hat für diese Sprache keine Musik.",
+      "cannot_connect": "jw.org ist nicht erreichbar.",
+      "unknown": "Unerwarteter Fehler. Prüfe das Home-Assistant-Protokoll."
     }
   }
 }
