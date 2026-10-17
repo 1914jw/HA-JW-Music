@@ -1,12 +1,7 @@
-"""Short-lived local copies of tracks, for players that need a file.
+"""Short-lived local copies of tracks for players that need a local file.
 
-pyatv cannot reliably stream an http(s) URL: it reads the
-stream through a fixed 64 KiB buffer and fails with "failed to init
-decoder" / "timed out reading from stream". Playing a local file path
-works, so for those players a track is downloaded once into the system
-temp folder (never into the HA config folder, so it is not part of
-backups) and handed over as ``PlayMedia.path``. Other players keep 
-streaming directly from jw.org.
+Files go into the system temp folder (not the HA config folder, so they
+are not part of backups) and are removed when the integration unloads.
 """
 
 from __future__ import annotations
@@ -100,10 +95,7 @@ async def _download(session: aiohttp.ClientSession, url: str) -> bytes:
 async def async_get_track_file(
     hass: HomeAssistant, session: aiohttp.ClientSession, url: str, mime_type: str
 ) -> Path | None:
-    """Return a local copy of the track at ``url``, or None on failure.
-
-    Callers fall back to the plain URL when this returns None.
-    """
+    """Return a local copy of the track at ``url``, or None on failure."""
     key = hashlib.sha256(url.encode()).hexdigest()[:24]
     target = _cache_dir() / f"{key}{_suffix(url, mime_type)}"
 
