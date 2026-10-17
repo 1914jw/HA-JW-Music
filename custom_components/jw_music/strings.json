@@ -2,8 +2,39 @@
   "config": {
     "step": {
       "user": {
-        "description": "Add JW Music as a media source? Everything is streamed directly from jw.org and never downloaded."
+        "description": "Add JW Music as a media source? Everything is streamed directly from jw.org and never downloaded.",
+        "data": {
+          "language": "Language code"
+        },
+        "data_description": {
+          "language": "jw.org language code used for song titles, e.g. E for English or X for German."
+        }
       }
+    },
+    "error": {
+      "invalid_language": "This language code does not exist on jw.org.",
+      "no_content": "jw.org has no music for this language.",
+      "cannot_connect": "Could not reach jw.org.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "description": "Changing the language reloads the integration and replaces the stored song list with the new language.",
+        "data": {
+          "language": "Language code"
+        },
+        "data_description": {
+          "language": "jw.org language code used for song titles."
+        }
+      }
+    },
+    "error": {
+      "invalid_language": "This language code does not exist on jw.org.",
+      "no_content": "jw.org has no music for this language.",
+      "cannot_connect": "Could not reach jw.org.",
+      "unknown": "Unexpected error. Check the Home Assistant log."
     }
   }
 }
