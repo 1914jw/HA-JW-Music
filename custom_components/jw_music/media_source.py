@@ -22,10 +22,9 @@ from .cache import async_get_track_file
 from .const import (
     DOMAIN,
     FILE_STREAMING_PLATFORMS,
-    INTERNATIONAL_MUSIC_FOLDER_NAME,
+    INTERNATIONAL_MUSIC_THUMBNAIL,
     LOGGER,
     NAME,
-    SOJ_FOLDER_NAME,
     SOJ_FOLDER_THUMBNAIL,
     SOUNDTRACKS_FOLDER_NAME,
     SOUNDTRACKS_FOLDER_STATIC_URL,
@@ -42,10 +41,8 @@ async def async_get_media_source(hass: HomeAssistant) -> JwMusicMediaSource:
 class JwMusicMediaSource(MediaSource):
     """Provide Sing Out Joyfully, International Music, and Soundtracks.
 
-    Identifiers are colon-delimited paths, e.g. "soj:12",
-    "intl:<guid>", "soundtracks:GNJST1Soundtrack:<guid>". Each folder is
-    only expanded (its children built) when it is the one actually being
-    browsed -- parent listings show unexpanded stubs.
+    Identifiers are colon-delimited paths, e.g. "soj:12", "intl:<guid>",
+    "soundtracks:GNJST1Soundtrack:<guid>".
     """
 
     name = NAME
@@ -67,14 +64,12 @@ class JwMusicMediaSource(MediaSource):
         if track is None:
             raise Unresolvable(f"Track {item.identifier} not found")
         url = track.get("url", "")
-        # Home Assistant version with PlayMedia.path
         if not url.startswith(("https://", "http://")):
             raise Unresolvable(f"Track {item.identifier} has no playable URL")
         mime_type = normalize_mime_type(track.get("mime_type"))
 
         path = None
         if self._target_needs_file(item):
-            # Apple TV cannot stream a URL reliably -- give it a local file.
             path = await async_get_track_file(
                 self.hass, async_get_clientsession(self.hass), url, mime_type
             )
@@ -89,7 +84,6 @@ class JwMusicMediaSource(MediaSource):
             try:
                 return PlayMedia(url, mime_type, path=path)
             except TypeError:
-                # Home Assistant version without PlayMedia.path
                 LOGGER.debug("PlayMedia.path not supported; using the URL")
         return PlayMedia(url, mime_type)
 
@@ -117,7 +111,11 @@ class JwMusicMediaSource(MediaSource):
         if len(parts) == 2 and parts[0] == "soundtracks":
             return self._browse_soundtrack(parts[1])
         if len(parts) in (2, 3) and parts[0] in ("soj", "intl", "soundtracks"):
-            return self._leaf(item.identifier, self._find_track(item.identifier))
+            return self._leaf(
+                item.identifier,
+                self._find_track(item.identifier),
+                self._folder_thumbnail(item.identifier),
+            )
 
         raise Unresolvable(f"Unknown identifier {item.identifier}")
 
@@ -144,8 +142,10 @@ class JwMusicMediaSource(MediaSource):
             can_expand=True,
             children_media_class=MediaClass.DIRECTORY,
             children=[
-                self._stub("soj", SOJ_FOLDER_NAME, SOJ_FOLDER_THUMBNAIL),
-                self._stub("intl", INTERNATIONAL_MUSIC_FOLDER_NAME),
+                self._stub("soj", self._library.soj_name, SOJ_FOLDER_THUMBNAIL),
+                self._stub(
+                    "intl", self._library.intl_name, INTERNATIONAL_MUSIC_THUMBNAIL
+                ),
                 self._stub(
                     "soundtracks",
                     SOUNDTRACKS_FOLDER_NAME,
@@ -160,7 +160,7 @@ class JwMusicMediaSource(MediaSource):
             identifier="soj",
             media_class=MediaClass.DIRECTORY,
             media_content_type=MediaType.MUSIC,
-            title=SOJ_FOLDER_NAME,
+            title=self._library.soj_name,
             thumbnail=SOJ_FOLDER_THUMBNAIL,
             can_play=False,
             can_expand=True,
@@ -179,12 +179,13 @@ class JwMusicMediaSource(MediaSource):
             identifier="intl",
             media_class=MediaClass.DIRECTORY,
             media_content_type=MediaType.MUSIC,
-            title=INTERNATIONAL_MUSIC_FOLDER_NAME,
+            title=self._library.intl_name,
+            thumbnail=INTERNATIONAL_MUSIC_THUMBNAIL,
             can_play=False,
             can_expand=True,
             children_media_class=MediaClass.MUSIC,
             children=[
-                self._leaf(f"intl:{guid}", song)
+                self._leaf(f"intl:{guid}", song, INTERNATIONAL_MUSIC_THUMBNAIL)
                 for guid, song in self._library.international_songs.items()
             ],
         )
@@ -244,6 +245,18 @@ class JwMusicMediaSource(MediaSource):
             can_expand=True,
         )
 
+    def _folder_thumbnail(self, identifier: str) -> str | None:
+        """Cover of the folder a track lives in (used when it has none)."""
+        parts = identifier.split(":")
+        if parts[0] == "soj":
+            return SOJ_FOLDER_THUMBNAIL
+        if parts[0] == "intl":
+            return INTERNATIONAL_MUSIC_THUMBNAIL
+        if parts[0] == "soundtracks" and len(parts) == 3:
+            folder = self._library.soundtracks.get(parts[1]) or {}
+            return folder.get("thumbnail")
+        return None
+
     @staticmethod
     def _leaf(
         identifier: str, track: Track | None, thumbnail: str | None = None
@@ -254,8 +267,6 @@ class JwMusicMediaSource(MediaSource):
             domain=DOMAIN,
             identifier=identifier,
             media_class=MediaClass.MUSIC,
-            # Always an "audio/..." MIME type: Apple TV and Cast browse
-            # filters hide anything else on audio-only players.
             media_content_type=normalize_mime_type(track.get("mime_type")),
             title=track["title"],
             thumbnail=thumbnail,
